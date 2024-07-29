@@ -83,6 +83,14 @@ func (n *LoopbackNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.
 	return OK
 }
 
+func (n *LoopbackNode) wasChanged() {
+	unix.Lremovexattr(n.path(), "user.syncthing.hash")
+}
+
+func (n *LoopbackNode) wasChangedFd(fd int) {
+	unix.Fremovexattr(fd, "user.syncthing.hash")
+}
+
 // path returns the full path to the file in the underlying file
 // system.
 func (n *LoopbackNode) path() string {
@@ -171,6 +179,9 @@ var _ = (NodeRmdirer)((*LoopbackNode)(nil))
 func (n *LoopbackNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	p := filepath.Join(n.path(), name)
 	err := syscall.Rmdir(p)
+	if err == nil {
+		n.wasChanged()
+	}
 	return ToErrno(err)
 }
 
@@ -179,6 +190,9 @@ var _ = (NodeUnlinker)((*LoopbackNode)(nil))
 func (n *LoopbackNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	p := filepath.Join(n.path(), name)
 	err := syscall.Unlink(p)
+	if err == nil {
+		n.wasChanged()
+	}
 	return ToErrno(err)
 }
 
@@ -193,6 +207,9 @@ func (n *LoopbackNode) Rename(ctx context.Context, name string, newParent InodeE
 	p2 := filepath.Join(n.RootData.Path, newParent.EmbeddedInode().Path(nil), newName)
 
 	err := syscall.Rename(p1, p2)
+	if err == nil {
+		n.wasChanged()
+	}
 	return ToErrno(err)
 }
 
@@ -206,6 +223,7 @@ func (n *LoopbackNode) Create(ctx context.Context, name string, flags uint32, mo
 		return nil, nil, 0, ToErrno(err)
 	}
 	n.preserveOwner(ctx, p)
+	n.wasChanged()
 	st := syscall.Stat_t{}
 	if err := syscall.Fstat(fd, &st); err != nil {
 		syscall.Close(fd)
@@ -252,7 +270,11 @@ func (n *LoopbackNode) renameExchange(name string, newparent InodeEmbedder, newN
 		return syscall.EBUSY
 	}
 
-	return ToErrno(renameat.Renameat(fd1, name, fd2, newName, renameat.RENAME_EXCHANGE))
+	err = renameat.Renameat(fd1, name, fd2, newName, renameat.RENAME_EXCHANGE)
+	if err == nil {
+		n.wasChanged()
+	}
+	return ToErrno(err)
 }
 
 var _ = (NodeSymlinker)((*LoopbackNode)(nil))
@@ -264,6 +286,7 @@ func (n *LoopbackNode) Symlink(ctx context.Context, target, name string, out *fu
 		return nil, ToErrno(err)
 	}
 	n.preserveOwner(ctx, p)
+	n.wasChanged()
 	st := syscall.Stat_t{}
 	if err := syscall.Lstat(p, &st); err != nil {
 		syscall.Unlink(p)
@@ -285,6 +308,7 @@ func (n *LoopbackNode) Link(ctx context.Context, target InodeEmbedder, name stri
 	if err != nil {
 		return nil, ToErrno(err)
 	}
+	n.wasChanged()
 	st := syscall.Stat_t{}
 	if err := syscall.Lstat(p, &st); err != nil {
 		syscall.Unlink(p)
@@ -431,6 +455,8 @@ func (n *LoopbackNode) Setattr(ctx context.Context, f FileHandle, in *fuse.SetAt
 		}
 	}
 
+	n.wasChanged()
+
 	fga, ok := f.(FileGetattrer)
 	if ok && fga != nil {
 		fga.Getattr(ctx, out)
@@ -481,8 +507,11 @@ func (n *LoopbackNode) CopyFileRange(ctx context.Context, fhIn FileHandle,
 	}
 	signedOffIn := int64(offIn)
 	signedOffOut := int64(offOut)
-	doCopyFileRange(lfIn.fd, signedOffIn, lfOut.fd, signedOffOut, int(len), int(flags))
-	return 0, syscall.ENOSYS
+	count, err := doCopyFileRange(lfIn.fd, signedOffIn, lfOut.fd, signedOffOut, int(len), int(flags))
+	if count > 0 {
+		n.wasChangedFd(lfOut.fd)
+	}
+	return count, err
 }
 
 // NewLoopbackRoot returns a root node for a loopback file system whose
