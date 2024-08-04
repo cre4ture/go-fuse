@@ -44,10 +44,6 @@ var _ = (FileFsyncer)((*loopbackFile)(nil))
 var _ = (FileSetattrer)((*loopbackFile)(nil))
 var _ = (FileAllocater)((*loopbackFile)(nil))
 
-func (n *loopbackFile) wasChangedFd() {
-	unix.Fremovexattr(n.fd, "user.syncthing.hash")
-}
-
 func (f *loopbackFile) Read(ctx context.Context, buf []byte, off int64) (res fuse.ReadResult, errno syscall.Errno) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -60,7 +56,7 @@ func (f *loopbackFile) Write(ctx context.Context, data []byte, off int64) (uint3
 	defer f.mu.Unlock()
 	n, err := syscall.Pwrite(f.fd, data, off)
 	if n > 0 {
-		f.wasChangedFd()
+		wasChangedFd(f.fd)
 	}
 	return uint32(n), ToErrno(err)
 }
@@ -160,7 +156,7 @@ func (f *loopbackFile) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fus
 		return errno
 	}
 
-	f.wasChangedFd()
+	wasChangedFd(f.fd)
 
 	return f.Getattr(ctx, out)
 }
@@ -169,7 +165,7 @@ func (f *loopbackFile) fchmod(mode uint32) syscall.Errno {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	err := syscall.Fchmod(f.fd, mode)
-	f.wasChangedFd()
+	wasChangedFd(f.fd)
 	return ToErrno(err)
 }
 
@@ -177,14 +173,14 @@ func (f *loopbackFile) fchown(uid, gid int) syscall.Errno {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	err := syscall.Fchown(f.fd, uid, gid)
-	f.wasChangedFd()
+	wasChangedFd(f.fd)
 	return ToErrno(err)
 }
 
 func (f *loopbackFile) ftruncate(sz uint64) syscall.Errno {
 	err := syscall.Ftruncate(f.fd, int64(sz))
 	if err == nil {
-		f.wasChangedFd()
+		wasChangedFd(f.fd)
 	}
 	return ToErrno(err)
 }
@@ -238,7 +234,7 @@ func (f *loopbackFile) setAttr(ctx context.Context, in *fuse.SetAttrIn) syscall.
 		}
 	}
 
-	f.wasChangedFd()
+	wasChangedFd(f.fd)
 
 	return OK
 }
@@ -270,6 +266,6 @@ func (f *loopbackFile) Allocate(ctx context.Context, off uint64, sz uint64, mode
 	if err != nil {
 		return ToErrno(err)
 	}
-	f.wasChangedFd()
+	wasChangedFd(f.fd)
 	return OK
 }
